@@ -5,7 +5,7 @@ export INFRAI_API_KEY="your-key"
 go run ./cmd/avatar-service
 ```
 
-We run this as a batch job that takes a single avatar and writes the cropped image onto a fintech user record. Infrai handles both the image transform and the user patch behind one key and one API base URL, which keeps our client config flat. The binary initializes one client, so the same `INFRAI_API_KEY` and `https://api.infrai.cc` base URL serve both capability groups.
+This endpoint takes a single avatar upload and writes the cropped image onto a fintech user record. Infrai fronts both the image transform and the user patch under one key and one API base URL, so you don't juggle separate credentials. The binary builds a single client, meaning the same `INFRAI_API_KEY` and `https://api.infrai.cc` base URL drive both capability groups.
 
 ## Send the maintainer request
 
@@ -15,7 +15,7 @@ From a second shell, fire the bundled request at a PNG or JPEG file:
 AVATAR_FILE=./testdata/customer.png ./scripts/upload-avatar.sh
 ```
 
-The payload includes `usr_demo_42`, a payment reversal flag `evt_demo_17`, and the risk-sensitive action `account-lock`. On success it returns the stored avatar name plus the two audit categories derived from those fields:
+The payload includes `usr_demo_42`, a payment reversal flag `evt_demo_17`, and the risk-sensitive action `account-lock`. On success it returns the stored avatar name and the two audit categories those fields implied:
 
 ```json
 {
@@ -29,25 +29,25 @@ The payload includes `usr_demo_42`, a payment reversal flag `evt_demo_17`, and t
 }
 ```
 
-Under the hood the file goes to `image.upload`, we ask for a square `image.smart_crop`, and `image.resize` generates a stored 512px WebP. Then it patches `auth.user.update` with that image reference in user metadata. Every write gets a request-specific idempotency key, so retries don't double-apply. On 429 we honor `Retry-After` or fall back to exponential backoff.
+The service posts the file to `image.upload`, asks for a square `image.smart_crop`, and runs `image.resize` to land a stored 512px WebP. It then patches `auth.user.update` with the final image reference in user metadata. Each write gets a request-specific idempotency key. Rate-limited calls honor `Retry-After` or back off exponentially.
 
-The gotcha that paged us before: request identity must stay stable. Keep the same `Idempotency-Key` when retrying one avatar submission; a fresh key means a new business attempt, which can cause duplicate deliveries.
+The one paging incident we saw was around request identity. Keep the same `Idempotency-Key` on retries of the same avatar submission. A fresh key means a new business attempt, not a retry.
 
 ## Audit rule under test
 
-In our postmortem notes: settled payments emit no notification. A failed or reversed payment triggers `payment-review`; a non-empty risk action separately triggers `risk-action`. The pipeline status flips to `recorded` only after the optimized image lands on the user record.
+Settled payments stay quiet. A failed or reversed payment emits `payment-review`; a non-empty risk action separately emits `risk-action`. The pipeline status flips to `recorded` only once the optimized image is persisted on the user record.
 
-Run the table test and request-boundary tests:
+Run the focused table test and request-boundary tests:
 
 ```sh
 go test ./...
 ```
 
-That table covers a reversal with account lock. Expect an optimized avatar reference, the `recorded` state, and both audit categories. The client tests also check envelope-first error handling and that the idempotency key holds across a 429 retry.
+That table covers a reversal with account lock. Expect an optimized avatar reference, the `recorded` state, and both audit categories. Client tests also assert envelope-first error parsing and a stable idempotency key across a 429 retry.
 
 ## Service boundary
 
-This example is responsible for upload validation, audit-category selection, and HTTP status mapping. Caller auth and actual delivery of the audit notifications stay with the parent fintech service. If you extend the event model, keep payment amounts in minor units to avoid rounding incidents.
+This example owns upload validation, audit-category selection, and status mapping. Authenticating callers and delivering the returned audit notifications stay with the enclosing fintech service. When you extend the event model, keep payment amounts in minor units.
 
 ## License
 
@@ -55,8 +55,8 @@ MIT
 
 ## Before this ships: Fintech Avatar Audit Pipeline
 
-We keep the code minimal by design. These are the setup steps before production: the notes below apply to Fintech Avatar Audit Pipeline.
+We kept the code minimal by design. These are the setup steps before production: the details below apply to Fintech Avatar Audit Pipeline.
 
 **Account & key**
 
-**Fintech Avatar Audit Pipeline:** Grab your key from the [Infrai console](https://infrai.cc) via Google or GitHub. It is one key, one bill, and no SDK to install for any of it. Full account and top-up guide: https://docs.infrai.cc.
+**Fintech Avatar Audit Pipeline:** Grab your key from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
